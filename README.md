@@ -11,11 +11,12 @@ priority, assigns responsibility, and tracks progress until it is resolved.
 |-------------------------|------------|-------------------------------------------------------------------------------|
 | Ogbanje Abraham Okwute  | Engineer A | Ticket creation, input validation, priority engine, tests (`<fill in later>`) |
 | Awo Wisdom              | Engineer B | Assignment, workflow, queue, reports, tests (`<fill in later>`)               |
+
 Shared: JSON persistence, code reviews, documentation.
 
 
 ## Requirements and setup
-- Python version: `<Python 3.12.3>` (check with `python --version`)
+- Python version: Python3 3.12.3 (check with `python3 --version`)
 - No external packages needed (standard library only: `json`, `unittest`).
 
 ```bash
@@ -33,13 +34,13 @@ Menu options:
 
 | Option | Action                  |
 |--------|-------------------------|
-| 1      | `<Create ticket>`       |
-| 2      | `<List / view tickets>` |
-| 3      | `<Assign ticket>`       |
-| 4      | `<Change status>`       |
-| 5      | `<Work queue>`          |
-| 6      | `<Reports>`             |
-| 0      | `<Exit>`                |
+| 1      | Create ticket           |
+| 2      | List / view tickets     |
+| 3      | Assign ticket           |
+| 4      | Change status           |
+| 5      | Work queue              |
+| 6      | Reports                 |
+| 0      | Exit                    |
 
 ## Running the tests
 
@@ -56,12 +57,12 @@ python3 -m unittest discover -s tests -v
 
 **Priority** (first matching rule wins):
 
-| Rule | Condition | Priority |
-|---|---|---|
-| 1 | high urgency AND 10+ affected users | critical |
-| 2 | high urgency OR 10+ affected users | high |
-| 3 | medium urgency OR 3+ affected users | medium |
-| 4 | everything else | low |
+| Rule | Condition                        | Priority |
+|------|-------------------------------------|----------|
+| 1    | high urgency AND 10+ affected users | critical |
+| 2    | high urgency OR 10+ affected users  | high     |
+| 3    | medium urgency OR 3+ affected users | medium   |
+| 4    | everything else                     | low      |
 
 **Status workflow:** `open → in_progress → resolved`
 - An unassigned ticket cannot move to `in_progress`.
@@ -93,7 +94,7 @@ campusflow/
 │   ├── design-decisions.md
 │   └── ai-learning-log.md
 └── data/
-    └──tickets.json
+    └── tickets.json  # created at runtime, not tracked by Git
 ```
 
 ## Documentation
@@ -103,8 +104,8 @@ campusflow/
 
 ## Pull requests
 
-| Author | PR link | Reviewer | Status |
-|---|---|---|---|
+| Author     | PR link    | Reviewer   | Status            |
+|------------|------------|------------|-------------------|
 | Engineer A | `<PR URL>` | Engineer B | `<merged / date>` |
 | Engineer B | `<PR URL>` | Engineer A | `<merged / date>` |
 
@@ -113,6 +114,5 @@ campusflow/
 - Single user only, no concurrent access
 
 ## Future improvements
-
 - `<idea 1>`
 - `<idea 2>`
