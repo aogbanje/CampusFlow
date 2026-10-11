@@ -1,8 +1,139 @@
-CampusFlow — AI Learning Log
-Fellow: Awo Wisdom
-Role: Engineer B
-Project: CampusFlow — CLI Helpdesk Ticket Manager
+# AI Learning Log
+
+# Project: CampusFlow — CLI Helpdesk Ticket Manager
+
+
+## Fellow: Ogbanje Abraham Okwute (Engineer A)
+
+### Interaction #1: Shared function contracts and design decisions
+
+Problem: Before coding, my partner and I needed agreed interfaces (storage,
+errors, return values, ID generation, JSON ownership, testability).
+
+My initial understanding: I knew functions take arguments but hadn't thought about passing the ticket list vs a global variable.
+
+Prompt to AI: As engineer A, what do you advise are the pointers to know to be able to write this project
+
+Useful AI guidance: Suggested a plain list of dicts passed into functions,
+ValueError for invalid input, pure functions with no input() outside main.py,
+and deriving the next ID from the highest existing ID rather than len()+1.
+
+My independent experiment/test: Build a list with T001 and T003 in
+the REPL and compare len(list)+1 with max-id+1; write what you observed>
+
+Verification source or result:
+- REPL: with ids T001 and T003, len + 1 gave T003, highest + 1 gave T004.
+  max(["T009", "T010"]) gave 'T010', which is correct only because the IDs are
+  zero-padded. max(["T999", "T1000"]) gave "T999", which shows string order
+  fails once IDs get wider, so I compare the numeric part..
+- Test: test_next_id_uses_numeric_max_not_length_or_string_order ... ok
+- Reference: Python docs, built-in functions, max() (docs.python.org/3/library/functions.html#max): confirms the default= argument and that strings compare in text order.
+
+Decision: Flagged the statement "the operator owns ID generation"; it was corrected to Engineer A.
+
+Related file/commit: docs/design-decisions.md, b6d6b087522157d79a06a9eeb1d056a5d0f723c8
+
+What I can now explain without AI:`len(tickets) + 1` only works if IDs are
+contiguous. With T001 and T003 in the list it gives T003, which duplicates an
+existing ID, so assign and change_status could act on the wrong ticket. Taking
+the highest numeric ID + 1 depends only on the data, and I convert to int
+because "T009" sorts after "T010" as text.
+
+### Interaction #2: bool is a subclass of int (validating affected_users)
+
+My initial understanding: isinstance(x, int) is enough
+
+Prompt to AI: Explain isinstance() and bool in Python with a small example
+unrelated to tickets.
+
+Useful AI guidance: bool is a subclass of int in Python, so True behaves as 1
+and False as 0. That means isinstance(True, int) is True, and a validator that
+only checks for int would accept True as a valid affected_users count. The fix
+is to reject bool explicitly, before the int check.
+
+My independent experiment/test:
+Prediction (before running): True
+Ran in REPL:
+>>> isinstance(True, int)
+True
+>>> True + 1
+2
+>>> type(True)
+class 'bool'
+
+Then, in validate_affected_users, I deleted the isinstance(value, bool) check
+and ran the tests. Expected: test_invalid_affected_users_rejected fails for
+value=True, because True is treated as 1 and returned as valid. 
+
+I restored the check and the suite
+passed again: Ran tests ... OK.
+
+Verification source or result: REPL output above, the failing and then passing
+test run, and the Python docs for built-in bool
+
+(https://docs.python.org/3/library/functions.html#bool), which state that bool
+is a subclass of int. 
+
+Decision: Accepted the explicit bool check in validate_affected_users. Without
+it, True would be stored as an affected_users value of True and could be
+treated as 1 in priority calculations.
+
+Related file/commit: campusflow/tickets.py (validate_affected_users),
+tests/test_tickets.py (test_invalid_affected_users_rejected).
+
+
+### Interaction #3: Reviewing AI-generated code for Engineer A's half
+
+Problem: I asked AI to write tickets.py and test_tickets.py, and needed to
+understand and verify it before opening a PR.
+
+My initial understanding: I knew the rules but not how to structure the validators.
+
+Prompt to AI: "write the code" (an earlier request was answered with a
+skeleton; the AI then provided full code).
+
+Useful AI guidance: Full tickets.py and 15 tests, with advice to retype it,
+predict outputs, and break it on purpose.
+
+My independent experiment/test: changed >= 10
+to > 10 and recorded which tests failed:
+- FAIL: test_boundaries (test_tickets.TestPriority.test_boundaries) (urgency='high', users=10)
+- FAIL: test_boundaries (test_tickets.TestPriority.test_boundaries) (urgency='low', users=10)
+
+
+Verification source or result: python3 -m unittest discover -s tests -v
+tical
+- self.assertEqual(calculate_priority(urgency, users), expected)
+AssertionError: 'medium' != 'high'
+
+
+Related file/commit: campusflow/tickets.py, tests/test_tickets.py
+
+### Critical evaluation
+
+AI suggestion: That "T009" would sort after "T010" as text, so a string max
+would pick the wrong ID, and a test named
+test_next_id_uses_numeric_max_not_length_or_string_order proved it.
+
+What I checked: I ran max(["T009", "T010"]) in the REPL and got 'T010', so the
+claim was wrong for zero-padded IDs. [I then ran max(["T999", "T1000"]) and got "T999".]
+
+Decision: Corrected. The numeric comparison is still the right design, but the
+reason is IDs wider than three digits, not T009 vs T010. [I changed the test to
+use T999 and T1000 and confirmed it fails with a string-based max: yes.]
+
+Evidence: 
+>>> max(["T999", "T1000"])
+'T999'
+
+
+
+
+# Fellow: Awo Wisdom
+# Role: Engineer B
+
 Language: Python 3.12.3
+
 ## Interaction 1 — JSON Persistence and Error Handling
 Problem:
 I needed to understand how to save tickets to a JSON file and load them again when the application restarts. I also needed to ensure that missing files and corrupted JSON files were handled correctly without accidentally losing existing data.
