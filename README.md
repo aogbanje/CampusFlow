@@ -1,4 +1,4 @@
-# CampusFlow
+# Project: CampusFlow — CLI Helpdesk Ticket Manager
 
 CampusFlow is a Python command-line helpdesk ticket manager for Learn2Earn
 campus staff. Informal support requests (Wi-Fi outages, faulty laptops, broken
@@ -9,11 +9,26 @@ priority, assigns responsibility, and tracks progress until it is resolved.
 
 | Name                    |  Role      | Contribution summary                                                          |
 |-------------------------|------------|-------------------------------------------------------------------------------|
-| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, input validation, priority engine, tests (`<fill in later>`) |
-| Awo Wisdom              | Engineer B | Assignment, workflow, queue, reports, tests (`<fill in later>`)               |
+| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, input validation, priority engine, tests                     |
+| Awo Wisdom              | Engineer B | Assignment, workflow, queue, reports, tests                                   |
 
 Shared: JSON persistence, code reviews, documentation.
 
+
+## Problem statement
+
+Campus staff receive technical support requests such as Wi-Fi outages, faulty
+laptops, broken development environments and inaccessible platforms. When these
+are reported informally, they get lost, nobody knows who is responsible, and
+urgent problems wait behind minor ones.
+
+CampusFlow fixes this by giving every request a ticket. It:
+- records each problem with a category, urgency and number of affected users
+- calculates a priority (critical, high, medium or low) from fixed rules
+- assigns each ticket to a named staff member
+- tracks progress from open to in progress to resolved
+- shows a work queue ordered by priority, and summary reports
+- saves tickets to a JSON file so they survive a restart
 
 ## Requirements and setup
 - Python version: Python3 3.12.3 (check with `python3 --version`)
@@ -31,7 +46,6 @@ python3 main.py
 ```
 
 Menu options:
-
 | Option | Action                  |
 |--------|-------------------------|
 | 1      | Create ticket           |
@@ -57,7 +71,7 @@ python3 -m unittest discover -s tests -v
 
 **Priority** (first matching rule wins):
 
-| Rule | Condition                        | Priority |
+| Rule | Condition                           | Priority |
 |------|-------------------------------------|----------|
 | 1    | high urgency AND 10+ affected users | critical |
 | 2    | high urgency OR 10+ affected users  | high     |
@@ -71,7 +85,8 @@ python3 -m unittest discover -s tests -v
 ## Where tickets are saved
 
 Tickets are stored in `data/tickets.json` (created automatically, not tracked
-by Git). To start fresh, delete that file: `<add exact command or steps>`.
+by Git). 
+To start fresh, delete that file: `rm -f data/tickets.json`.
 If the file is malformed, the app shows an error instead of overwriting it.
 
 ## Project structure
@@ -103,16 +118,34 @@ campusflow/
 - [AI learning log](docs/ai-learning-log.md)
 
 ## Pull requests
-
 | Author     | PR link    | Reviewer   | Status            |
 |------------|------------|------------|-------------------|
 | Engineer A | `<PR URL>` | Engineer B | `<merged / date>` |
+| Engineer A | `<PR URL>` | Engineer A | `<merged / date>` |
+| Engineer A | `<PR URL>` | Engineer B | `<merged / date>` |
+| Engineer A | `<PR URL>` | Engineer A | `<merged / date>` |
+| Engineer A | `<PR URL>` | Engineer B | `<merged / date>` |
+| Engineer A | `<PR URL>` | Engineer A | `<merged / date>` |
+| Engineer B | `<PR URL>` | Engineer B | `<merged / date>` |
 | Engineer B | `<PR URL>` | Engineer A | `<merged / date>` |
+| Engineer B | `<PR URL>` | Engineer B | `<merged / date>` |
+| Engineer B | `<PR URL>` | Engineer A | `<merged / date>` |
+| Engineer B | `<PR URL>` | Engineer B | `<merged / date>` |
+| Engineer B | `<PR URL>` | Engineer A | `<merged / date>` |
+
+
+
 
 ## Known limitations
 - No way to delete a ticket
 - Single user only, no concurrent access
 
 ## Future improvements
-- `<idea 1>`
-- `<idea 2>`
+-**Atomic saves:** write to a temporary file and then rename it, so a crash
+  during a save can never leave a half-written `tickets.json`.
+
+- **Delete or archive tickets:** currently tickets cannot be removed. This
+  would also require a separate ID counter, so an ID is never reused.
+
+- **Search and filters:** filter tickets by category, assignee or status
+  instead of listing everything.
