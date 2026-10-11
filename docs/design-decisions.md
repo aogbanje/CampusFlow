@@ -9,7 +9,7 @@ Errors: Raising ValueError with a clear message, and the CLI catches it and prin
 ## What is the expected return value when a ticket is created, assigned, or updated?
 Return values: create_ticket returns the new ticket dictionary.
 
-ID generation: Engineer A owns the ID generation. It works after a reload, We derive the next ID from the highest existing numeric ID + 1, not from len(tickets) + 1.
+ID generation: Engineer A owns the ID generation. It works after a reload, We derive the next ID from the highest existing numeric ID + 1, not from len(tickets) + 1; because no delete feature exists, so highest + 1 never reuses an ID.
 
 ## Which module owns loading/saving JSON and how do other modules call it?
 JSON: Storage.py owns loading/saving JSON. Both engineers integrate it.
