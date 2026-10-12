@@ -132,7 +132,6 @@ campusflow/
 | Engineer A | 98f388e1c567bb11c2a454fd86d1f335a4b096c6 | Engineer B | 779b20c177f527e8772e0e25e48b934e9415129f / 11-OCT-2026 |
 
 
-
 ## Known limitations
 - No way to delete a ticket
 - Single user only, no concurrent access
