@@ -1,45 +1,71 @@
-"""JSON persistence for CampusFlow (feature F7).
+"""Safe, validated JSON persistence for CampusFlow (Engineer A).
 
-Rules from the README / guide:
-- Tickets are saved to data/tickets.json (created automatically).
-- A missing file means a fresh start (empty list).
-- A malformed file raises a clear error and is NEVER overwritten.
-- IDs must stay unique after reload.
+Rules
+-----
+- Tickets are saved to ``data/tickets.json`` (created automatically).
+- A missing file means a fresh start (an empty list).
+- A malformed or inconsistent file raises :class:`StorageError` and is NEVER
+  overwritten, so a human can repair it.
+- Loading validates the WHOLE collection and returns a brand-new list. Nothing
+  is handed back unless every record is acceptable, so a load that fails
+  half-way cannot leave the caller holding a partly-valid collection.
+- Saving validates too, which gives one guarantee: anything this module writes
+  is something this module can read back.
 
-Other modules never touch files; they call load_tickets / save_tickets.
+File format
+-----------
+A plain JSON list of ticket objects -- the same envelope the original
+CampusFlow used, so pre-existing ticket files keep working::
+
+    [
+      {
+        "id": "T001", "title": "Wi-Fi down", "category": "Network",
+        "urgency": "high", "affected_users": 15, "priority": "critical",
+        "status": "open", "assigned_to": null,
+        "notes": [
+          {"note_id": "N001", "author": "Mentor A", "message": "Rebooted AP."}
+        ]
+      }
+    ]
+
+Migration: ``notes`` was added in CampusFlow Next. A file written by the
+original version has no ``notes`` key; those tickets are upgraded to
+``"notes": []`` on load rather than being rejected, so old tickets are not
+discarded. Every other field is required.
 """
 
 import json
 import os
 import tempfile
 
-DEFAULT_PATH = os.path.join("data", "tickets.json")
-
-REQUIRED_FIELDS = (
-    "id",
-    "title",
-    "category",
-    "urgency",
-    "affected_users",
-    "priority",
-    "status",
-    "assigned_to",
+from campusflow.tickets import next_ticket_id  # noqa: F401  (re-exported)
+from campusflow.validation import (
+    ValidationError,
+    validate_ticket_collection,
 )
 
+DEFAULT_PATH = os.path.join("data", "tickets.json")
 
-class StorageError(ValueError):
-    """Raised when the ticket file cannot be read safely.
 
-    Subclasses ValueError so the CLI's usual `except ValueError` shows it.
+class StorageError(ValidationError):
+    """Raised when the ticket file cannot be read or written safely.
+
+    Subclasses ValidationError, which subclasses ValueError, so the CLI's
+    existing ``except ValueError`` shows it.
     """
 
 
 def load_tickets(path=DEFAULT_PATH):
-    """Return the list of tickets stored at `path`.
+    """Return the validated list of tickets stored at ``path``.
 
-    - Missing file -> [] (fresh start).
-    - Malformed JSON or wrong structure -> StorageError. The file is not
-      modified, so a human can repair it.
+    - Missing file -> ``[]`` (fresh start).
+    - Unreadable, malformed or inconsistent -> :class:`StorageError`, and the
+      file is left exactly as it was.
+
+    The returned list is always newly built. Validation is all-or-nothing:
+    a single bad record means the caller gets an exception, never a partial
+    list, so a previously good in-memory collection can never be replaced by
+    something half-broken.
     """
     if not os.path.exists(path):
         return []
@@ -55,42 +81,29 @@ def load_tickets(path=DEFAULT_PATH):
     except OSError as err:
         raise StorageError(f"Could not read ticket file '{path}': {err}") from err
 
-    _validate_structure(data, path)
-    return data
-
-
-def _validate_structure(data, path):
-    """Check the loaded JSON is a list of ticket dicts with unique IDs."""
-    if not isinstance(data, list):
+    try:
+        return validate_ticket_collection(data, source=f"file '{path}'")
+    except ValidationError as err:
+        # Re-wrap so callers only ever need to know about StorageError, and
+        # so the message reminds the user that their file is still intact.
         raise StorageError(
-            f"Ticket file '{path}' must contain a list of tickets."
-        )
-
-    seen = set()
-    for index, ticket in enumerate(data):
-        if not isinstance(ticket, dict):
-            raise StorageError(
-                f"Ticket #{index + 1} in '{path}' is not an object."
-            )
-        missing = [field for field in REQUIRED_FIELDS if field not in ticket]
-        if missing:
-            raise StorageError(
-                f"Ticket #{index + 1} in '{path}' is missing: "
-                f"{', '.join(missing)}."
-            )
-        if ticket["id"] in seen:
-            raise StorageError(
-                f"Duplicate ticket ID '{ticket['id']}' in '{path}'."
-            )
-        seen.add(ticket["id"])
+            f"Ticket file '{path}' was rejected: {err} "
+            "The file was NOT changed. Fix or delete it, then restart."
+        ) from err
 
 
 def save_tickets(tickets, path=DEFAULT_PATH):
-    """Write tickets to `path` as JSON, creating the folder if needed.
+    """Validate, then write tickets to ``path`` as JSON.
 
-    Writes to a temporary file first and then swaps it in, so a crash
-    part-way through cannot leave a half-written tickets file.
+    The write goes to a temporary file which is then swapped in with
+    ``os.replace`` (atomic on the same filesystem), so a crash part-way
+    through cannot leave a half-written tickets file.
+
+    Validation happens before the temporary file is even created, so a
+    rejected save touches nothing at all.
     """
+    cleaned = validate_ticket_collection(tickets, source="the collection being saved")
+
     folder = os.path.dirname(path)
     if folder:
         os.makedirs(folder, exist_ok=True)
@@ -100,24 +113,9 @@ def save_tickets(tickets, path=DEFAULT_PATH):
     )
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump(tickets, f, indent=2)
+            json.dump(cleaned, f, indent=2)
         os.replace(temp_path, path)
     except BaseException:
         if os.path.exists(temp_path):
             os.remove(temp_path)
         raise
-
-
-def next_ticket_id(tickets):
-    """Return the next unused ID ('T001' for an empty list).
-
-    Based on the highest existing number, so IDs stay unique after a
-    reload and are never reused.
-    """
-    highest = 0
-    for ticket in tickets:
-        try:
-            highest = max(highest, int(ticket["id"][1:]))
-        except (KeyError, ValueError, TypeError):
-            continue
-    return f"T{highest + 1:03d}"
