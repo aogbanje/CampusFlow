@@ -7,10 +7,11 @@ priority, assigns responsibility, and tracks progress until it is resolved.
 
 ## Team
 
-| Name                    |  Role      | Contribution summary                                                          |
-|-------------------------|------------|-------------------------------------------------------------------------------|
-| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, validation helpers, note storage, JSON safety, tests         |
-| Awo Wisdom              | Engineer B | Search and combined filters, reports and quality insights, note and quiz CLI, tests |
+| Name                    |  Role      | Contribution summary                                                                                  |
+|-------------------------|------------|-------------------------------------------------------------------------------------------------------|
+| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, validation helpers, note storage, JSON safety, tests                                 |
+| Awo Wisdom              | Engineer B | Assignment, workflow, queue, reports and tests                                                        |
+| Gabriel Oche            | Engineer B (campusflow next) | Search and combined filters, reports and quality insights, note and quiz CLI, tests |
 
 Shared: JSON persistence, code reviews, documentation.
 
