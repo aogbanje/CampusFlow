@@ -232,8 +232,10 @@ def validate_note(note):
     text = note_id.strip().upper()
     if not text.startswith("N") or not (text[1:].isascii() and text[1:].isdigit()):
         raise ValidationError(f"Note ID '{note_id}' must look like 'N001'.")
-    if int(text[1:]) <= 0:
+    number = int(text[1:])
+    if number <= 0:
         raise ValidationError("Note ID number must be positive.")
+    text = format_note_id(number)
 
     # Author and message are checked with the same helpers the add-note
     # action uses, so a hand-edited file cannot contain a note the running
