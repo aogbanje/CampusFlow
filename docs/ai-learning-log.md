@@ -299,3 +299,177 @@ Related file/commit:
 What I can now explain without AI:
 I can explain why generating the next ticket ID from the number of tickets can be unreliable. The list length and highest ticket number are different things.
 By examining the highest existing numeric suffix and adding one, the application can continue generating IDs after loading saved tickets, provided that the existing IDs are valid and unique.
+
+---
+
+# CampusFlow Next — Engineer B
+
+# Fellow: Awo Wisdom
+# Role: Engineer B
+
+These are the two learning cycles for the CampusFlow Next sprint. The earlier
+entries above are from the original CampusFlow sprint.
+
+## Interaction 5 — casefold() versus lower() for the title search
+
+Problem (concept gap):
+Requirement C asks for **case-insensitive** title search. I had always used
+`.lower()` for this and assumed `.casefold()` was just an alias — a stricter
+spelling of the same thing. I could not have explained what actually differs,
+or why it would matter for a search box.
+
+Prompt to AI:
+"Compare `str.casefold()` and `str.lower()` in Python. Explain what actually
+differs, using a small unrelated example. Do not write any of my project
+code, and suggest test cases I should try rather than writing them."
+
+Summary of AI guidance:
+- `lower()` maps each character to its lowercase form. `casefold()` performs
+  *case folding*, the Unicode operation designed specifically for
+  caseless comparison.
+- The documented difference shows up in characters whose lowercase form is
+  not a full case fold. AI claimed `"ß".lower()` is `"ß"` while
+  `"ß".casefold()` is `"ss"`, so `"STRASSE"` and `"straße"` compare equal
+  under casefold but **not** under lower.
+- AI also mentioned Turkish dotless-i as a locale-sensitive trap for
+  `lower()`, and recommended casefold for any user-facing search.
+- AI suggested test cases: a German ß word, a Greek final sigma, and a
+  mixed-case ASCII baseline.
+
+Tiny unrelated experiment:
+At the Python prompt, with a made-up shop name — unrelated to tickets:
+
+    >>> "ß".lower(), "ß".casefold()
+    ('ß', 'ss')
+    >>> "STRASSE".lower() == "straße".lower()
+    False
+    >>> "STRASSE".casefold() == "straße".casefold()
+    True
+    >>> "WIFI".lower() == "wifi".lower()
+    True
+
+The first two lines confirmed the AI's claim; the last line confirmed that
+for plain ASCII both functions agree, which is why the bug would be easy to
+miss in testing with English-only data.
+
+Independent verification:
+- Documentation: the Python standard library reference for `str.casefold`
+  (docs.python.org/3/library/stdtypes.html#str.casefold) states it is intended
+  for caseless matching, and `str.lower` is described as a lowercase mapping
+  — two different jobs, not one.
+- Test: `tests/test_search.py::TestTitleSearch::test_casefold_matches_where_lower_would_not`
+  searches for `STRASSE` in a title containing `Straße` and expects a match.
+  The same test asserts `"STRASSE".lower()` is **not** in the lowercased
+  title, so it fails if anyone swaps `casefold()` back to `lower()`.
+
+Decision:
+Use `.casefold()` on both the query and the title in
+`campusflow/search.py`. The cost is identical and the behaviour is correct
+for non-English text a campus could plausibly type.
+
+Personal reflection:
+Before, I believed the two functions were interchangeable and would have
+picked `lower()` out of habit — and no test I would have thought to write
+(word "wifi" vs "WIFI") could ever have caught the difference. What I
+changed in my code was one call site, but the real change is that I now
+choose the function by its contract rather than by its name. I can explain
+this without AI in the room: `lower()` lowercases, `casefold()` folds case,
+and only folding is correct for comparison.
+
+Related file/commit:
+- `campusflow/search.py`
+- `tests/test_search.py`
+
+---
+
+## Interaction 6 — How multiple filters should combine, and an AI suggestion I rejected
+
+Problem (concept gap):
+Requirement C says the optional category, status and priority filters "must
+work together: if supplied, ALL must match", while an empty filter means "do
+not filter by that field". I was unsure how to write that cleanly without a
+tangle of nested `if` statements, and — more importantly — I had not thought
+about what "matching" should mean for punctuation.
+
+Prompt to AI:
+"I have a ticket list and optional filters: title substring, category,
+status, priority. Blank means the filter is not applied. Explain two ways to
+combine them, and propose test cases for an unrelated example like filtering
+a book list. Do not implement my project."
+
+Summary of AI guidance:
+- Recommended building a list of predicate functions and requiring `all()` of
+  them, rather than nesting `if`s. This scales when a fourth filter is added
+  later, and each predicate can be tested on its own.
+- Correctly warned that an empty string is a *value*, not an absence — if a
+  blank filter is treated as "match the empty string", the result is silently
+  wrong rather than obviously broken.
+- Also proposed, as a "nicer search experience", **normalising punctuation**
+  before comparing, so that `wifi` would match `Wi-Fi` as well as `wi-fi`.
+
+Tiny unrelated experiment:
+On a small list of book titles, testing only the combination logic — the
+same shape as the AND question, with a different domain:
+
+    title  = "The Hobbit"
+    genre  = "fantasy"
+    pages  = 310
+    >>> ("hob" in "the hobbit", genre == "fantasy", pages > 100)
+    (True, True, True)
+    >>> all((False, True, True))     # one filter fails -> record excluded
+    False
+    >>> all((True, True, True))
+    True
+
+This confirmed that `all()` over a tuple of predicates gives AND, and that a
+single failing predicate drops the record — which is exactly the required
+"ALL must match".
+
+Then I tested the punctuation suggestion, which is the part I rejected:
+
+    >>> "wifi" in "Wi-Fi".lower().replace("-", "")
+    True
+    >>> "wifi" in "Wi-Fi".lower()
+    False
+
+So the suggestion does work mechanically. It is still wrong for this task.
+
+Independent verification:
+- Specification: the brief says substring matching is enough, that "`WI-FI`
+  and `wi-fi` match each other, **assuming the same punctuation**", and
+  explicitly warns "Do not promise fuzzy spelling correction". Stripping
+  punctuation is a step toward exactly the fuzzy behaviour the brief rules
+  out.
+- Tests: `test_punctuation_is_not_normalised_away` pins that `wifi` does
+  **not** match `Wi-Fi`. `test_and_is_not_or` and
+  `test_filters_combine_with_and` pin the AND rule, including a fixture where
+  OR would return two tickets and AND returns one.
+- I also checked the cost: punctuation stripping would have to be applied to
+  both sides consistently, and would silently make `T-001` and `T001` match.
+  The benefit did not justify the surprise.
+
+Decision:
+I **rejected** the punctuation-normalisation suggestion and adopted the AND
+combination with `all()`-style matching. A blank or `None` filter is
+converted to `None` before matching and skipped entirely, so it cannot be
+mistaken for "match the empty string". The rejected suggestion and the reason
+are recorded in `docs/design-decisions.md` so the next reader does not
+re-propose it.
+
+Personal reflection:
+Before, I would probably have accepted the punctuation suggestion because it
+makes search feel friendlier, and I would have described it as an improvement.
+What AI gave me was a plausible, working idea — the useful part was the
+combination pattern, and the dangerous part was the unrequested extra. What I
+tested was whether each suggestion was *allowed*, not merely whether it
+worked, and the tests showed the extra went further than the brief permits.
+The lesson I can now state without AI: a correct implementation of the wrong
+requirement is still a defect, and the acceptance criteria — not the demo
+— decide.
+
+Related file/commit:
+- `campusflow/search.py`
+- `tests/test_search.py` (`test_and_is_not_or`,
+  `test_punctuation_is_not_normalised_away`, `test_blank_filters_are_not_applied`)
+- `docs/design-decisions.md`
+
