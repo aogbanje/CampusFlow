@@ -129,6 +129,316 @@ Evidence:
 
 
 
+---
+
+# CampusFlow Next — Sprint 2
+
+## Fellow: Ogbanje Abraham Okwute (Engineer A)
+
+Scope for this sprint: centralised validation, ticket lifecycle safety,
+structured follow-up notes, and validated JSON load/save.
+
+The concept gaps below were chosen because they are the ones I hit while
+writing `campusflow/validation.py`, `campusflow/notes.py` and the new
+`campusflow/storage.py` — not because they were on a checklist.
+
+### Interaction #4: `json.load` succeeding does not mean the data is trustworthy
+
+**My initial understanding:** If `json.load()` returns without raising, the
+file is fine and I can use it. I thought JSON validation meant "is this valid
+JSON?"
+
+**Prompt to AI:**
+"Why might `json.load` succeed but return unsafe or inconsistent business
+data? Explain the difference between syntactic validity and business
+consistency, using a small example unrelated to my project — for example a
+library book catalogue — then quiz me on it."
+
+**Useful AI guidance:**
+`json.load()` only proves the *text* is well-formed JSON. It says nothing
+about whether the resulting Python objects make sense to my program. The AI
+separated this into three layers:
+
+1. **Syntactic** — is it parseable JSON? (`json.JSONDecodeError`)
+2. **Structural** — is it a list? Does each item have the keys I expect?
+3. **Semantic** — are the values legal, and are they consistent with each
+   other?
+
+My original `_validate_structure` covered layers 1 and 2 only. It checked
+that keys existed and that ticket IDs were unique, but never that
+`"status": "banana"` was a legal status, or that a ticket's `priority` agreed
+with its `urgency` and `affected_users`.
+
+The AI also made a point I had not separated out before: `priority` is
+*derived*, not typed in. `urgency` and `affected_users` are inputs, `priority`
+is output. So a stored priority can be checked against the rule that would
+have produced it.
+
+**My independent experiment/test (unrelated example):**
+A book catalogue where `available_copies` cannot exceed `total_copies`.
+
+Prediction (before running):
+
+```python
+import json
+raw = '[{"title": "Dune", "total_copies": 3, "available_copies": 9}]'
+catalogue = json.loads(raw)          # prediction: succeeds, no error
+catalogue[0]["available_copies"] > catalogue[0]["total_copies"]   # True
+```
+
+So the parse succeeds and the record is nonsense. The check has to be written
+by hand:
+
+```python
+def validate_book(book):
+    if book["available_copies"] > book["total_copies"]:
+        raise ValueError("available cannot exceed total")
+```
+
+**⚠️ PENDING — paste the actual REPL output here before submitting.**
+Run the two snippets above and record what you saw. Also record the output of
+`python3 -c "import json; json.loads('')"` to see the actual
+`JSONDecodeError` text.
+
+**Verification source or result:**
+
+- Test: `test_storage.py::TestLoadRejectsInconsistentRecords::test_priority_inconsistent_with_the_rule_is_rejected`
+  — a file with `urgency: low, affected_users: 1, priority: critical` is
+  rejected with "does not match the rule".
+- Test: `test_validation.py::TestValidateTicket::test_priority_inconsistent_with_urgency_and_users_is_rejected`
+- Test: `test_validation.py::TestValidateTicket::test_illegal_status_in_a_record_is_rejected`
+- Reference: Python docs, `json` module,
+  `json.JSONDecodeError` (docs.python.org/3/library/json.html) — confirms the
+  decoder raises on malformed input and says nothing about the contents.
+
+**Decision:** Accepted, and it went further than the AI first framed it. I
+added a *semantic* layer to `load_tickets`: every record is validated with the
+same `validate_ticket()` the running application uses, including re-deriving
+`priority` from `urgency` and `affected_users` and comparing. A file that
+contradicts itself is now rejected instead of being reported as a number
+nobody can trust.
+
+There is a second benefit I only saw after implementing it: because loading
+reuses the same validators as creation, a hand-edited file **cannot** contain
+a note the running app would have refused to create. There is one definition
+of a valid ticket, not two.
+
+**Related file/commit:** `campusflow/validation.py` (`validate_ticket`,
+`validate_ticket_collection`), `campusflow/storage.py` (`load_tickets`),
+`tests/test_storage.py`. Commit SHA: _to record_.
+
+**What I can now explain without AI:**
+Three separate questions have to be answered about loaded data — can it be
+parsed, does it have the shape I expect, and are its values legal and
+consistent? `json.load()` answers only the first. For CampusFlow the third
+layer is the important one, because `priority` is derived: if a stored
+priority disagrees with the rule, the analytics will confidently report a
+wrong number, and the mistake is invisible unless you go looking for it. The
+fix is to validate on load with the *same* rules used on creation, and to
+reject the whole collection rather than install a partly-valid one.
+
+---
+
+### Interaction #5: A suggestion I REJECTED after reviewing the evidence
+
+**Concept gap:** How to add a new field (`notes`) to a format that already has
+data files in use. I did not know how to make the loader accept old files
+without weakening validation.
+
+**Prompt to AI:**
+"My JSON is a list of ticket objects. I want to add a `notes` field, which is
+a list of note objects. There are already ticket files in use that have no
+`notes` key. How should the loader handle them? Give me the options and the
+trade-offs; do not write my project."
+
+**Useful AI guidance (the ordinary answer):**
+Add `"notes"` to the required-fields list, so every ticket must have it — this
+keeps the schema strict and the validation uniform. Any file missing `notes`
+would then be rejected as incomplete.
+
+The AI's own trade-off note is what made me stop and check it: rejecting the
+file means the user cannot load their existing tickets at all.
+
+**Why I rejected it (evidence):**
+
+I checked this against the acceptance contract rather than against how tidy
+the code would look. The contract says: *"You may refactor internally, but do
+not discard old working tickets. If you change file format incompatibly,
+include a small documented migration or clearly explain supported versions
+and protect source data."*
+
+Every ticket file written by the original CampusFlow lacks `notes`, because
+the original version had no such field. Making `notes` required would mean
+every existing file is rejected — and since `main.py` refuses to start when
+loading fails, the practical effect is that no existing user can open the app
+at all. "Stricter validation" would have been the wrong kind of strict.
+
+I then compared three options instead of two:
+
+| Option | Effect on existing files | Verdict |
+|--------|--------------------------|---------|
+| Make `notes` required | All rejected, app will not start | Rejected |
+| Accept any ticket, ignore bad notes | Old files load, but malformed notes get in | Rejected — this is the hole Requirement E closes |
+| Absent `notes` means `[]`; present `notes` is fully validated | Old files upgraded, new damage still caught | **Chosen** |
+
+The third option keeps the strictness exactly where the risk is. A file with
+*no* `notes` key is not damaged, it is just old. A file with a `notes` list
+that contains a note with no `message`, or a duplicate `N001`, *is* damaged
+and is still rejected.
+
+**My independent experiment/test:**
+Simulate a file written by the original version and confirm it loads, while a
+newly *damaged* notes list is still refused.
+
+Prediction (before running): the legacy file loads with `notes == []`, and
+the second file raises `StorageError` mentioning the message length.
+
+```python
+legacy = {"id": "T001", "title": "Wi-Fi down", "category": "Network",
+          "urgency": "high", "affected_users": 15, "priority": "critical",
+          "status": "open", "assigned_to": None}      # no "notes" key
+# -> expect: loads, and the result has notes == []
+
+damaged = dict(legacy, notes=[{"note_id": "N001", "author": "Mentor A"}])
+# -> expect: rejected, because the note has no "message"
+```
+
+**⚠️ PENDING — paste the actual run output here before submitting.**
+Run the two snippets through `load_tickets` on a temp file and record the
+result. Do not write the result you expect; write the result you get.
+
+**Verification source or result:**
+
+- Test: `test_storage.py::TestLoadRejectsInconsistentRecords::test_legacy_file_without_notes_still_loads`
+- Test: `test_storage.py::TestLoadRejectsInconsistentRecords::test_malformed_note_is_rejected`
+  (this is the pair that proves the decision was implemented, not just
+  discussed: one file loads, the other does not)
+- Test: `test_validation.py::TestValidateTicket::test_legacy_ticket_without_notes_key_is_upgraded`
+- Documented in `README.md` under "Migration and version support" and in
+  `docs/design-decisions.md` §6.
+
+**Decision:** **Rejected the AI's suggested approach.** `notes` stays
+*optional on load, required after that*: an absent key is upgraded to `[]`,
+while a present `notes` value is passed through full per-note validation.
+Every other field remains required. Old tickets are preserved and new damage
+is still caught.
+
+**Related file/commit:** `campusflow/validation.py`
+(`LEGACY_OPTIONAL_FIELDS`, `validate_notes`), `campusflow/storage.py`,
+`README.md`. Commit SHA: _to record_.
+
+**What I can now explain without AI:**
+Making a schema stricter is not automatically safer. The question is whether
+the thing being rejected is *damaged* or merely *old*. A missing `notes` key
+is old — the original app could not have written it. A `notes` list
+containing a note with no message is damaged. Treating those two cases the
+same would either lock every existing user out of their own data, or let real
+corruption through. The safe default is to accept the old shape, upgrade it
+in memory, and keep full validation on any data that is actually present.
+
+---
+
+### Interaction #6: Comparing two designs for reporting a refusal
+
+**Concept gap:** Whether a function that refuses an action should raise an
+exception or return a value like `False`/`None`. I had been raising
+everywhere, but the CLI needs explanations, and catching exceptions for
+ordinary control flow felt wrong.
+
+**Prompt to AI:**
+"Compare two designs for a Python function that refuses an invalid action:
+(A) raise an exception, (B) return a success flag or None. Which is easier to
+test, and which is easier to call from a menu that must explain the refusal
+to a user? Give the trade-offs for each and do not write my project."
+
+**Useful AI guidance:**
+The AI argued that (B) is friendlier at a call site because the caller does
+not need `try/except`, and that using exceptions for expected outcomes is
+often called an anti-pattern.
+
+It also stated that "exceptions should be reserved for exceptional
+conditions". I did not accept that claim as-is, because in this program a
+refused status change is not exceptional — it is an ordinary event a support
+desk user hits constantly. So the stated reason did not obviously apply.
+
+**What I checked, and the decision:**
+
+I tested the AI's claim against the code that already existed rather than
+against theory. `main.py` already wraps these calls in `except ValueError`,
+and `docs/design-decisions.md` — written before this sprint — already records
+"Raising ValueError with a clear message, and the CLI catches it and prints
+it." Switching to return-values would mean two conventions in one codebase,
+which the acceptance contract explicitly warns against: *"Agree on error
+response conventions (exceptions or explicit results); do not combine
+inconsistent patterns."*
+
+So neither pure design was right. What I actually wanted was both, without
+mixing them:
+
+- the **mutating** function raises (`change_status`, `add_note`) — one
+  convention, unchanged, existing `except ValueError` still works;
+- a separate, side-effect-free **predicate** answers "may I?" without raising
+  (`can_transition`, `can_assign`, `can_add_note`) — so the menu can print the
+  reason without using exceptions for control flow.
+
+The AI's underlying concern was correct; its proposed fix would have created a
+second convention. Separating "ask" from "do" solved it while keeping one
+error convention.
+
+**My independent experiment/test:**
+I wrote a test that cross-checks the two functions against each other, so the
+predicate can never drift from the action:
+
+Prediction (before running): for every combination of status × assignee ×
+target, `can_transition(...)[0]` equals "did `change_status` succeed", and
+when it fails the ticket is byte-for-byte unchanged.
+
+```python
+allowed, _ = can_transition(ticket, target)
+try:
+    change_status(tickets, "T001", target)
+    acted = True
+except ValueError:
+    acted = False
+    assert tickets == before      # a refusal must write nothing
+assert allowed == acted           # the two must agree
+```
+
+**⚠️ PENDING — paste the actual run output here before submitting.**
+Run `python3 -m unittest tests.test_workflow.TestCanTransition -v` and paste
+the result. If any combination disagrees, that is a real bug in my code and
+belongs in this log as found, not as predicted.
+
+**Verification source or result:**
+
+- Test: `tests/test_workflow.py::TestCanTransition::test_predicate_agrees_with_change_status`
+- Test: `tests/test_workflow.py::TestCanTransition::test_predicate_never_raises_and_never_mutates`
+- Test: `tests/test_notes.py::TestCanAddNote::test_never_raises_on_a_broken_ticket`
+- Documented in `docs/design-decisions.md` §1 (one error convention) and §2
+  (predicates for asking, actions for doing).
+
+**Decision:** **Partly accepted, partly rejected.** I kept the exception
+convention and rejected the proposal to switch to return values, because it
+would have introduced a second convention into a codebase that already had
+one. I accepted the AI's underlying point — "asking must not require
+throwing" — and implemented it as separate side-effect-free predicates.
+
+**Related file/commit:** `campusflow/workflow.py` (`can_transition`,
+`can_assign`), `campusflow/notes.py` (`can_add_note`),
+`docs/design-decisions.md`. Commit SHA: _to record_.
+
+**What I can now explain without AI:**
+A refusal can be reported two ways, and the right answer here was "neither
+one alone". Mutating functions raise, so there is a single error convention
+and the existing CLI keeps working. Read-only predicates return
+`(allowed, reason)`, so a menu can explain a refusal without treating an
+ordinary outcome as an exception. The risk of having both is that they drift
+apart, so a test asserts they always agree. I also learned to check a general
+claim ("exceptions are for exceptional conditions") against my own domain
+before applying it — for a support queue, a refused status change is routine,
+not exceptional.
+
+
 # Fellow: Awo Wisdom
 # Role: Engineer B
 
