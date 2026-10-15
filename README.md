@@ -35,8 +35,8 @@ CampusFlow fixes this by giving every request a ticket. It:
 - No external packages needed (standard library only: `json`, `unittest`).
 
 ```bash
-git clone https://github.com/aogbanje/CampusFlow.git
-cd CampusFlow
+git clone https://github.com/aogbanje/campusflow.git
+cd campusflow
 ```
 
 ## Running the app
@@ -65,7 +65,8 @@ python3 -m unittest discover -s tests -v
 
 ## Ticket rules
 
-**Fields:** id, title, category, urgency, affected_users, priority, status, assigned_to.
+**Fields:** id, title, category, urgency, affected_users, priority, status,
+assigned_to, notes.
 
 **Allowed values:** category: Network, Hardware, Software, Other. Urgency: low, medium, high.
 
@@ -78,34 +79,148 @@ python3 -m unittest discover -s tests -v
 | 3    | medium urgency OR 3+ affected users | medium   |
 | 4    | everything else                     | low      |
 
+`priority` is **derived**, so it is never typed in by hand. A saved ticket
+whose `priority` disagrees with its `urgency` and `affected_users` is
+rejected on load rather than reported as if it were true.
+
+**Validation rules:**
+- Title must not be blank after trimming.
+- Category must be one of the four values above (case and spacing are
+  normalised, so `" network "` is stored as `"Network"`).
+- Urgency must be low, medium or high.
+- `affected_users` must be a strictly positive whole number. Floats,
+  strings, negatives, zero and booleans are rejected — `True` is rejected
+  explicitly because Python counts it as the integer 1.
+- `assigned_to` is either `None` or a non-blank label.
+
 **Status workflow:** `open → in_progress → resolved`
 - An unassigned ticket cannot move to `in_progress`.
 - A resolved ticket can only be modified after an explicit reopen (back to `open`).
+- Every refusal leaves the ticket completely unchanged. Validation always
+  runs before anything is written.
+
+**Open Work Queue:** shows **open tickets only**, ordered
+critical > high > medium > low, with earlier numeric IDs first for ties
+(`T002` before `T010`). An `in_progress` or `resolved` ticket does not appear
+in it. Tickets that are `open` *or* `in_progress` are still counted as
+"unresolved" in the reports.
+
+### Follow-up notes
+
+Each ticket carries a `notes` list. A note is:
+
+```json
+{"note_id": "N001", "author": "Mentor A", "message": "Rebooted the AP."}
+```
+
+- Notes can only be added while a ticket is `open` or `in_progress`. A
+  resolved ticket refuses new notes until it is reopened — this is the same
+  rule as assignment.
+- The author label must not be blank.
+- The message must be 5–300 characters after trimming.
+- A rejected note does **not** consume a note ID. IDs are derived from the
+  notes that exist, so the sequence never has holes and never repeats.
+- Notes are preserved through resolve and reopen.
+- Note IDs are unique **within a ticket**. A note is identified by its ticket
+  ID plus its note ID, so `T001/N001` and `T002/N001` are different notes.
 
 ## Where tickets are saved
 
 Tickets are stored in `data/tickets.json` (created automatically, not tracked
-by Git). 
+by Git).
 To start fresh, delete that file: `rm -f data/tickets.json`.
-If the file is malformed, the app shows an error instead of overwriting it.
+
+### File format
+
+The file is a plain JSON **list** of ticket objects — the same envelope the
+original CampusFlow used, so pre-existing files load with no conversion step.
+
+```json
+[
+  {
+    "id": "T001",
+    "title": "Wi-Fi down in Block C",
+    "category": "Network",
+    "urgency": "high",
+    "affected_users": 15,
+    "priority": "critical",
+    "status": "open",
+    "assigned_to": null,
+    "notes": [
+      {"note_id": "N001", "author": "Mentor A", "message": "Rebooted the AP."}
+    ]
+  }
+]
+```
+
+### Validation on load
+
+Loading validates the **whole collection before handing anything back**. If
+any single record is unacceptable, the load is rejected with a clear message
+and the current in-memory tickets are left untouched — there is no partial
+load. The file on disk is never rewritten or deleted by a failed load, so a
+human can repair it.
+
+Rejected on load:
+
+| Problem | Example |
+|---------|---------|
+| Not valid JSON | truncated file |
+| Wrong top-level type | `{...}` instead of `[...]` |
+| Missing required field | a ticket with no `urgency` |
+| Duplicate ticket ID | two `T001` records |
+| Illegal value | `"status": "banana"`, `"category": "Plumbing"` |
+| Contradictory record | `urgency: low`, `affected_users: 1`, `priority: critical` |
+| `in_progress` with no assignee | breaks the workflow invariant |
+| Malformed note | missing `message`, or a message under 5 characters |
+| Duplicate note ID in one ticket | two `N001` notes on `T001` |
+
+### Migration and version support
+
+`notes` was added in CampusFlow Next. A file written by the original version
+has no `notes` key. Rather than reject those files — which would effectively
+throw away every existing ticket — each such ticket is upgraded to
+`"notes": []` as it loads. Every other field remains required, so a file that
+is genuinely damaged is still refused.
+
+There is no version number in the file and no migration script to run: old
+files are read directly, and the first save writes them back in the new shape.
+Files written by CampusFlow Next are not readable by the original version,
+which did not know about `notes`; keep a copy if you need to go back.
+
+### ID continuity across a restart
+
+Both ID sequences are derived from the highest number that actually exists,
+never from a counter or from `len(tickets)`:
+
+- next ticket ID = highest ticket number + 1
+- next note ID = highest note number on **that ticket** + 1
+
+So after closing and reopening the app, a new ticket cannot reuse an ID that
+is already in the file, and a new note cannot reuse a note ID on its ticket.
 
 ## Project structure
 ```
 campusflow/
 ├── README.md
 ├── .gitignore
-├── main.py
+├── main.py                     # CLI only: input() and print() live here
 ├── campusflow/
 │   ├── __init__.py
-│   ├── tickets.py
-│   ├── workflow.py
-│   ├── storage.py
-│   └── reports.py
+│   ├── validation.py           # all validation rules + priority rule (A)
+│   ├── tickets.py              # ticket schema and creation (A)
+│   ├── notes.py                # structured follow-up notes (A)
+│   ├── workflow.py             # assignment, status lifecycle, work queue
+│   ├── storage.py              # validated JSON load/save (A)
+│   └── reports.py              # analytics
 ├── tests/
-│   ├── test_tickets.py
+│   ├── test_tickets.py         # original regression tests
 │   ├── test_workflow.py
-│   └── test_storage.py
+│   ├── test_storage.py
+│   ├── test_validation.py      # Engineer A
+│   └── test_notes.py           # Engineer A
 ├── docs/
+│   ├── baseline-check.md       # what the audited commit did before changes
 │   ├── design-decisions.md
 │   └── ai-learning-log.md
 └── data/
@@ -114,6 +229,7 @@ campusflow/
 
 ## Documentation
 
+- [Baseline check](docs/baseline-check.md)
 - [Design decisions](docs/design-decisions.md)
 - [AI learning log](docs/ai-learning-log.md)
 
