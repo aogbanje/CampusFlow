@@ -19,110 +19,100 @@ We test business logic by using pure functions that take arguments, with no inpu
 
 ---
 
-# CampusFlow Next — decisions added by Engineer A
+# CampusFlow Next — Engineer B
 
-These were agreed with Engineer B **before** coding, because B's CLI calls
-A's functions directly.
+## Do the optional search filters combine with AND or with OR?
+AND. A ticket is returned only when it satisfies every filter that was actually supplied.
 
-## 1. One error convention, everywhere: exceptions
+Reason: the user sets a filter in order to *narrow* the list. Someone who
+types `wifi` and also picks `Network` means "the Wi-Fi problems in the
+Network category", not "everything that is Wi-Fi OR Network". OR would make
+adding a filter widen the result, which is the opposite of what the control
+looks like it does.
 
-Every function in the data layer raises `ValidationError` (a subclass of
-`ValueError`) on refusal. Nothing returns `None` or a "success" flag to mean
-failure. This keeps the existing `except ValueError` blocks in `main.py`
-working while letting new code catch the narrower type.
+Consequence: a single failing filter drops the ticket, which is why the
+implementation can be read as a list of predicates that must all pass.
 
-B's CLI therefore wraps calls in `try/except ValueError` and prints the
-message. No function needs a second return value for "did it work".
+See `campusflow/search.py::_matches` and `tests/test_search.py::TestCombinedFilters`.
 
-## 2. Predicates for asking, actions for doing
+## Why must search not edit the ticket collection?
+Because it is a *view*, not an action. Nothing the user typed while searching
+has been validated as an intended change, so there is no valid change to
+make. Search returns a new list holding the same ticket dicts, and never
+shortens, reorders or edits the original.
 
-Some refusals are normal UI events ("this ticket is resolved, reopen it
-first"), and an exception is a clumsy way to say that. So each mutation has a
-side-effect-free companion:
+This is asserted rather than assumed:
+`tests/test_search.py::TestSearchIsReadOnly` snapshots the collection before
+and after a search, checks the original order is unchanged, and checks the
+returned list is a different object.
 
-| Ask (never raises)   | Do (raises on refusal) |
-|----------------------|------------------------|
-| `can_transition(...)`| `change_status(...)`   |
-| `can_assign(...)`    | `assign_ticket(...)`   |
-| `can_add_note(...)`  | `add_note(...)`        |
+A separate reason is the priority-sorted view in Requirement D: it is the
+same read-only operation with a different ordering, so making search sort in
+place would corrupt the stored order for every other view.
 
-`can_transition` is the single definition of the ticket lifecycle.
-`change_status` calls it, so the menu can never offer a move the workflow
-would refuse. `tests/test_workflow.py::TestCanTransition` cross-checks the two
-against every combination of status, assignee and target.
+## What does a blank filter mean?
+"Do not filter by this field" — not "match the empty string".
 
-## 3. Validation is centralised, and it never mutates
+The two are easy to conflate and the mistake is quiet: treating a blank
+category as a value would match nothing and look like "no tickets found",
+which the user would read as a data problem rather than a UI one. `None` and
+whitespace-only strings are therefore both normalised to `None` and skipped.
 
-All rules live in `campusflow/validation.py`. Every `validate_*` helper
-returns a cleaned value or raises; none of them writes to a ticket.
+Pinned by `tests/test_search.py::test_blank_filters_are_not_applied`.
 
-This is what makes **validate-before-mutate** real rather than aspirational:
-a function performs every check first and writes on its last line, so a
-refusal cannot leave a half-changed ticket. The tests assert both the raised
-error *and* that the ticket is byte-for-byte unchanged, because an exception
-alone does not prove the data survived.
+## Why is the resolution percentage 0.0 for an empty dataset?
+Because it is both the arithmetically honest answer and the one that cannot
+crash. `resolved / total * 100` divides by zero when there are no tickets, so
+the total is computed first and the division is guarded.
 
-## 4. `calculate_priority` moved into `validation.py`
+Reporting 100% (or `N/A`) would be a worse answer than 0%: with no tickets
+there is nothing resolved, and a percentage the Head of Campus cannot
+compare against the following week is not worth showing.
 
-`validate_ticket` has to re-derive the priority to check that a stored
-`priority` agrees with its `urgency` and `affected_users`. That means
-validation needs the rule, and validation must not import higher-level
-modules (that would be a circular import). The rule now lives in
-`validation.py` and `tickets.py` re-exports it, so
-`from campusflow.tickets import calculate_priority` still works.
+Pinned by `tests/test_reports.py::test_empty_dataset_reports_zero_percent_without_crashing`
+and `tests/test_cli.py::TestReportsMenu::test_empty_collection_reports_zero_percent`.
 
-## 5. Why loading validates the derived field at all
+## Is punctuation normalised during title search?
+No. Search is case-insensitive **substring** matching and nothing more, so
+`WI-FI` matches `wi-fi` but `wifi` does **not** match `Wi-Fi`.
 
-`priority` is *derived* from `urgency` and `affected_users`, not typed by a
-human. A file that says `urgency: low, affected_users: 1, priority: critical`
-is internally contradictory, and the reports would happily count it. The
-loader rejects it instead of reporting a number nobody can trust.
+I considered stripping punctuation so `wifi` would also match `Wi-Fi`. It
+works, and it makes the search feel friendlier — but it is the beginning of
+fuzzy matching, which the brief explicitly rules out ("Do not promise fuzzy
+spelling correction; substring matching is enough" and "WI-FI and wi-fi match
+each other, **assuming the same punctuation**").
 
-## 6. `notes` is optional on load — a deliberate migration
+It would also introduce silent surprises: `T-001` and `T001` would start
+matching each other, and the transformation has to be applied consistently to
+both sides or the results become unpredictable. The suggestion and the reason
+for rejecting it are recorded in `docs/ai-learning-log.md`, Interaction 6.
 
-`notes` is new in CampusFlow Next, so a file written by the original version
-has no such key. Rejecting those files would effectively discard every
-existing ticket, which the guide forbids. Such records are upgraded to
-`"notes": []` on load. Every *other* field stays required, and once a file
-has been saved by CampusFlow Next it always contains `notes`.
+Pinned by `tests/test_search.py::test_punctuation_is_not_normalised_away` — a
+test whose purpose is to stop this being "fixed" later without a decision.
 
-The JSON envelope is unchanged: a plain list of ticket objects. There is no
-version wrapper, so old files load with no conversion step.
+## Why was the original Open Work Queue left alone?
+Requirement D asks for a separate optional view sorted by priority and ticket
+ID, and explicitly says the original queue must not be silently replaced.
 
-## 7. `save_tickets` validates before writing
+The original queue shows **open tickets only** — that is the contract, and
+`in_progress` work is deliberately excluded from it. Rather than widen that
+filter (which would quietly change what an existing menu option means for
+every user who already relies on it), the broader priority-ordered view was
+added as part of Search (option 7), which shows any status the user asks for.
 
-This gives one guarantee: **anything this module writes, this module can read
-back.** It also means a bug that builds a malformed ticket is caught at the
-save boundary instead of silently poisoning the file for the next run.
+Menu option 5 is unchanged in behaviour and in name; the two views now sit
+side by side, and the difference between them is documented rather than
+implied.
 
-Consequence: `save_tickets([{"id": "T002", "bad": object()}])` now raises
-`ValidationError` rather than `TypeError`. The original test's real subject —
-a failed save leaves the previous file intact with no temp files behind — is
-unchanged and still asserted.
+## Why do the CLI handlers take input_fn and output_fn?
+So the menu can be tested without a human at a keyboard.
 
-## 8. Note IDs are derived, never counted
+A handler that calls `input()` directly can only be tested by typing, which
+means CLI behaviour is usually left untested — and the retry loops, which are
+exactly the code most likely to hide an infinite loop, are the least tested
+code in the project.
 
-`next_note_id(ticket)` returns highest existing number + 1, exactly like
-`next_ticket_id`. This is what makes "a rejected note does not consume an ID"
-true *by construction* instead of by remembering to decrement a counter.
-It also means IDs stay correct across a save/reload cycle, since they are
-recomputed from the notes that actually exist.
-
-Note IDs are unique **within a ticket**; a note is identified by the pair
-(ticket ID, note ID). Uniqueness across the whole file is therefore not
-required and is not enforced.
-
-## 9. The Open Work Queue now shows OPEN tickets only
-
-**This changes original behaviour.** The first version had
-`QUEUE_STATUSES = ("open", "in_progress")` — its own comment flagged the
-choice as undecided. The CampusFlow Next contract fixes it: the original
-queue lists open tickets only, and an `in_progress` or `resolved` ticket must
-not appear in it.
-
-`tests/test_workflow.py::test_queue_excludes_in_progress_tickets` replaces
-`test_queue_includes_in_progress_tickets`, which asserted the old behaviour
-and would now be wrong. The ticket is still *unresolved*, so it counts in
-`unresolved` and appears in the separate priority-sorted search view. Nothing
-was silently swapped — the queue was corrected and the change is recorded
-here, in the test docstring, and in `docs/baseline-check.md`.
+Passing `input_fn=input` and `output_fn=print` as defaults changes nothing
+for real users but lets a test drive "choose option 8, then type a bad ticket
+ID" with a scripted reply list and assert on the messages that came back. See
+`tests/test_cli.py`, where no test touches the keyboard or `data/tickets.json`.

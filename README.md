@@ -9,8 +9,8 @@ priority, assigns responsibility, and tracks progress until it is resolved.
 
 | Name                    |  Role      | Contribution summary                                                          |
 |-------------------------|------------|-------------------------------------------------------------------------------|
-| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, input validation, priority engine, tests                     |
-| Awo Wisdom              | Engineer B | Assignment, workflow, queue, reports, tests                                   |
+| Ogbanje Abraham Okwute  | Engineer A | Ticket creation, validation helpers, note storage, JSON safety, tests         |
+| Awo Wisdom              | Engineer B | Search and combined filters, reports and quality insights, note and quiz CLI, tests |
 
 Shared: JSON persistence, code reviews, documentation.
 
@@ -46,15 +46,19 @@ python3 main.py
 ```
 
 Menu options:
-| Option | Action                  |
-|--------|-------------------------|
-| 1      | Create ticket           |
-| 2      | List / view tickets     |
-| 3      | Assign ticket           |
-| 4      | Change status           |
-| 5      | Work queue              |
-| 6      | Reports                 |
-| 0      | Exit                    |
+| Option | Action                            |
+|--------|-----------------------------------|
+| 1      | Create ticket                     |
+| 2      | List / view tickets               |
+| 3      | Assign ticket                     |
+| 4      | Change status                     |
+| 5      | Open work queue                   |
+| 6      | Reports                           |
+| 7      | Search tickets                    |
+| 8      | Add follow-up note                |
+| 9      | View ticket notes                 |
+| 10     | Engineering Understanding Check   |
+| 0      | Exit                              |
 
 ## Running the tests
 
@@ -123,6 +127,51 @@ Each ticket carries a `notes` list. A note is:
 - Notes are preserved through resolve and reopen.
 - Note IDs are unique **within a ticket**. A note is identified by its ticket
   ID plus its note ID, so `T001/N001` and `T002/N001` are different notes.
+
+## Search and filters (option 7)
+
+Search is **read-only**: it returns matching tickets and never adds, edits or
+reorders anything.
+
+- The **title search** is a case-insensitive **substring** match, so `WI-FI`
+  finds `Wi-Fi down in Lab 3`. Punctuation is still significant, so `wifi`
+  does **not** match `Wi-Fi`.
+- **Category, status and priority** are optional filters. Leaving one blank
+  means "do not filter by this field".
+- Supplied filters **combine with AND** — a ticket must satisfy every filter
+  you set, not just one. So `wifi` + `Network` + `open` returns only open
+  Network tickets whose title matches.
+- Results are ordered by **priority** (critical → low) and then by **numeric
+  ticket ID**, so `T2` comes before `T10`.
+- An invalid filter option re-prompts instead of failing.
+
+## Follow-up notes (options 8 and 9)
+
+Each ticket carries a `notes` list. A note is:
+
+```json
+{"note_id": "N001", "author": "Mentor A", "message": "Rebooted the AP."}
+```
+
+- Notes are identified by **ticket ID plus note ID**, so `N001` may exist on
+  more than one ticket.
+- Notes can only be added while a ticket is `open` or `in_progress`. A
+  resolved ticket refuses new notes until it is reopened — the same rule as
+  assignment.
+- The author label must not be blank.
+- The message must be 5–300 characters after trimming.
+- A rejected note **does not consume a note ID**: the next ID is always the
+  highest existing ID plus one.
+- Notes are preserved through resolve and reopen, and option 9 lists them in
+  note ID order.
+
+## Reports (option 6)
+
+Reports show the total, the counts by status, priority and category, the
+**unresolved** count (open + in_progress), the **resolved** count, and the
+**resolution rate** (`resolved / total * 100`). An empty dataset reports
+`0.0%` rather than raising a division error, and a reopened ticket is counted
+by its current status, so no ticket is counted twice.
 
 ## Where tickets are saved
 
@@ -199,33 +248,87 @@ never from a counter or from `len(tickets)`:
 So after closing and reopening the app, a new ticket cannot reuse an ID that
 is already in the file, and a new note cannot reuse a note ID on its ticket.
 
+### File format
+
+The file is a JSON **list** of ticket objects:
+
+```json
+[
+  {
+    "id": "T001",
+    "title": "Wi-Fi down in Lab 3",
+    "category": "Network",
+    "urgency": "high",
+    "affected_users": 15,
+    "priority": "critical",
+    "status": "open",
+    "assigned_to": null,
+    "notes": [
+      {"note_id": "N001", "author": "Mentor A", "message": "Rebooted the AP."}
+    ]
+  }
+]
+```
+
+The whole file is validated before it replaces anything in memory. A file is
+**rejected — leaving current data untouched —** if it is not valid JSON, is
+not a list, has a missing required field, repeats a ticket ID, uses an
+unknown category/urgency/priority/status, stores a `priority` that disagrees
+with the priority rule, marks a ticket `in_progress` without an assignee, or
+contains a malformed or duplicated note.
+
+`notes` was added in CampusFlow Next. A file written by the original version
+has no `notes` key; those tickets load fine and are simply given `[]`, so
+older files are not discarded.
+
 ## Project structure
 ```
 campusflow/
 ├── README.md
 ├── .gitignore
-├── main.py                     # CLI only: input() and print() live here
+├── main.py                  # CLI only: collects input, calls the package, prints
 ├── campusflow/
 │   ├── __init__.py
-│   ├── validation.py           # all validation rules + priority rule (A)
-│   ├── tickets.py              # ticket schema and creation (A)
-│   ├── notes.py                # structured follow-up notes (A)
-│   ├── workflow.py             # assignment, status lifecycle, work queue
-│   ├── storage.py              # validated JSON load/save (A)
-│   └── reports.py              # analytics
+│   ├── validation.py        # every validation rule, in one place
+│   ├── tickets.py           # create a ticket, next ticket ID
+│   ├── workflow.py          # assignment, status transitions, work queue
+│   ├── notes.py             # add/read follow-up notes
+│   ├── search.py            # read-only search and combined filters
+│   ├── reports.py           # counts, unresolved/resolved, resolution rate
+│   ├── storage.py           # validated JSON load and atomic save
+│   └── understanding_check.py  # the six-question bank and its scoring
 ├── tests/
 │   ├── test_tickets.py         # original regression tests
 │   ├── test_workflow.py
+│   ├── test_validation.py
 │   ├── test_storage.py
-│   ├── test_validation.py      # Engineer A
-│   └── test_notes.py           # Engineer A
+│   ├── test_notes.py
+│   ├── test_search.py
+│   ├── test_reports.py
+│   ├── test_understanding.py
+│   ├── test_cli.py
+│   └── test_bughunter_notes.py
 ├── docs/
-│   ├── baseline-check.md       # what the audited commit did before changes
+│   ├── baseline-check.md
 │   ├── design-decisions.md
 │   └── ai-learning-log.md
 └── data/
     └── tickets.json  # created at runtime, not tracked by Git
 ```
+
+## Running the tests
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+Run this from the repository root: `campusflow` is imported as a package, so
+running it from elsewhere fails with `ModuleNotFoundError`.
+
+The CLI tests never read the keyboard and never touch `data/tickets.json`.
+Every handler takes an injectable `input_fn` / `output_fn`, so a test drives
+"choose option 8, then type a bad ticket ID" with a scripted list of replies
+and asserts on the messages that came back.
 
 ## Documentation
 
@@ -251,13 +354,18 @@ campusflow/
 ## Known limitations
 - No way to delete a ticket
 - Single user only, no concurrent access
+- Search is substring matching only: there is no fuzzy matching or spelling
+  correction, and punctuation must match exactly.
 
 ## Future improvements
--**Atomic saves:** write to a temporary file and then rename it, so a crash
-  during a save can never leave a half-written `tickets.json`.
-
 - **Delete or archive tickets:** currently tickets cannot be removed. This
   would also require a separate ID counter, so an ID is never reused.
 
-- **Search and filters:** filter tickets by category, assignee or status
-  instead of listing everything.
+- **Filter by assignee:** search currently filters by title, category, status
+  and priority. Filtering by `assigned_to` would be a small addition to
+  `search_tickets`.
+
+- **Harden `notes_for`:** it assumes every note in memory has a canonical
+  `note_id`. A malformed note raises `KeyError` rather than
+  `ValidationError`, which the CLI does not catch. This is recorded as a
+  bug-hunter finding in `tests/test_bughunter_notes.py`.
