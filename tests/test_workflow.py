@@ -2,6 +2,8 @@ import unittest
 
 from campusflow.workflow import (
     assign_ticket,
+    can_assign,
+    can_transition,
     change_status,
     find_ticket,
     get_work_queue,
@@ -150,9 +152,28 @@ class TestQueue(unittest.TestCase):
         ids = [t["id"] for t in get_work_queue(tickets)]
         self.assertEqual(ids, ["T002"])
 
-    def test_queue_includes_in_progress_tickets(self):
+    def test_queue_excludes_in_progress_tickets(self):
+        """CHANGED in CampusFlow Next.
+
+        The original version included in_progress tickets in the Open Work
+        Queue (QUEUE_STATUSES = ("open", "in_progress")). The acceptance
+        contract now says the queue shows OPEN tickets only, so this test
+        asserts the opposite of what it used to. An in_progress ticket is
+        still unresolved -- it appears in the reports and in the
+        priority-sorted search view, just not in this queue.
+        """
         tickets = [make_ticket("T001", status="in_progress", assigned_to="Amina")]
-        self.assertEqual(len(get_work_queue(tickets)), 1)
+        self.assertEqual(get_work_queue(tickets), [])
+
+    def test_queue_shows_only_open_tickets_from_a_mixed_collection(self):
+        tickets = [
+            make_ticket("T001", priority="critical", status="open"),
+            make_ticket("T002", priority="critical", status="in_progress", assigned_to="Amina"),
+            make_ticket("T003", priority="high", status="resolved", assigned_to="Amina"),
+            make_ticket("T004", priority="low", status="open"),
+        ]
+        ids = [t["id"] for t in get_work_queue(tickets)]
+        self.assertEqual(ids, ["T001", "T004"])
 
     def test_empty_queue(self):
         self.assertEqual(get_work_queue([]), [])
@@ -210,6 +231,82 @@ class TestReports(unittest.TestCase):
         before = [dict(t) for t in tickets]
         build_report(tickets)
         self.assertEqual(tickets, before)
+
+
+class TestCanTransition(unittest.TestCase):
+    """The lifecycle predicate is the single source of truth for legality.
+
+    It must agree with change_status in BOTH directions: never say "allowed"
+    for a move change_status refuses, and never say "refused" for one it
+    accepts.
+    """
+
+    def test_reports_allowed_for_the_legal_path(self):
+        allowed, reason = can_transition(make_ticket("T001", assigned_to="Amina"), "in_progress")
+        self.assertTrue(allowed)
+        self.assertEqual(reason, "")
+
+    def test_reports_refusal_with_a_reason_instead_of_raising(self):
+        allowed, reason = can_transition(make_ticket("T001"), "in_progress")
+        self.assertFalse(allowed)
+        self.assertIn("assigned", reason.lower())
+
+    def test_unknown_status_is_refused_not_raised(self):
+        allowed, reason = can_transition(make_ticket("T001", assigned_to="A"), "banana")
+        self.assertFalse(allowed)
+        self.assertTrue(reason)
+
+    def test_predicate_never_raises_and_never_mutates(self):
+        for status in ("open", "in_progress", "resolved", "banana", None):
+            for target in ("open", "in_progress", "resolved", "banana", None):
+                with self.subTest(current=status, target=target):
+                    ticket = make_ticket("T001", status=status, assigned_to="Amina")
+                    before = dict(ticket)
+                    can_transition(ticket, target)  # must not raise
+                    self.assertEqual(ticket, before)
+
+    def test_predicate_agrees_with_change_status(self):
+        """Cross-check: every combination gives the same verdict both ways."""
+        for current in ("open", "in_progress", "resolved"):
+            for assignee in (None, "Amina"):
+                for target in ("open", "in_progress", "resolved", "banana"):
+                    with self.subTest(current=current, assignee=assignee, target=target):
+                        tickets = [
+                            make_ticket("T001", status=current, assigned_to=assignee)
+                        ]
+                        allowed, _ = can_transition(tickets[0], target)
+                        before = [dict(t) for t in tickets]
+                        try:
+                            change_status(tickets, "T001", target)
+                            acted = True
+                        except ValueError:
+                            acted = False
+                            # A refusal must not have written anything.
+                            self.assertEqual(tickets, before)
+                        self.assertEqual(
+                            allowed,
+                            acted,
+                            f"can_transition said {allowed} but change_status "
+                            f"{'succeeded' if acted else 'raised'}",
+                        )
+
+
+class TestCanAssign(unittest.TestCase):
+    def test_resolved_tickets_are_refused_with_a_reason(self):
+        allowed, reason = can_assign(make_ticket("T001", status="resolved"))
+        self.assertFalse(allowed)
+        self.assertIn("reopen", reason.lower())
+
+    def test_open_and_in_progress_tickets_can_be_assigned(self):
+        for status in ("open", "in_progress"):
+            with self.subTest(status=status):
+                allowed, _ = can_assign(make_ticket("T001", status=status))
+                self.assertTrue(allowed)
+
+    def test_never_raises_on_a_broken_ticket(self):
+        allowed, reason = can_assign({})
+        self.assertTrue(allowed)  # no status key -> not resolved
+        self.assertEqual(reason, "")
 
 
 if __name__ == "__main__":
